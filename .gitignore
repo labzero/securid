@@ -3,3 +3,4 @@ mkmf.log
 *.gem
 *.o
 *.so
+ext/securid/.DS_Store

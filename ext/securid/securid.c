@@ -20,6 +20,18 @@ ID securid_id_session;
 // ID used for status storage on RSA::SecurID::Session
 ID securid_id_session_status;
 
+// ID used for test mode storage on RSA::SecurID::Session
+ID securid_id_session_test_mode;
+
+// symbol version of 'test_mode'
+static VALUE rb_symTestMode;
+
+// symbol version of 'resynchronize'
+static VALUE rb_symResynchronize;
+
+// symbol version of 'change_pin'
+static VALUE rb_symChangePin;
+
 // IDs used to identify RSA::SecurID::Session constants
 ID securid_id_session_authenticated;
 ID securid_id_session_denied;
@@ -177,7 +189,8 @@ static VALUE securid_authenticate(VALUE self, VALUE username, VALUE passcode)
 
 // Checks that the status of the session `self` matches the constant identified by `status_id`. Pass
 // NULL for `status_id` to check if the the status of `self` is Qnil.
-void securid_session_check_status(VALUE self, ID status_id) {
+void securid_session_check_status(VALUE self, ID status_id)
+{
 	VALUE current_status = rb_ivar_get(self, securid_id_session_status);
 	VALUE compared_status;
 	int invalid_state;
@@ -186,7 +199,8 @@ void securid_session_check_status(VALUE self, ID status_id) {
 	{
 		compared_status = rb_const_get(rb_cRSASecurIDSession, status_id);
 		invalid_state = !rb_eql(current_status, compared_status);
-	} else {
+	} else
+	{
 		invalid_state = !NIL_P(current_status);
 	}
 
@@ -196,11 +210,37 @@ void securid_session_check_status(VALUE self, ID status_id) {
 	}
 }
 
-// def RSA::SecurID::Session.new
-static VALUE securid_session_initalize(VALUE self)
+int securid_session_is_test_mode(VALUE self)
+{
+	VALUE test_mode = rb_ivar_get(self, securid_id_session_test_mode);
+	return RTEST(test_mode);
+}
+
+int securid_session_is_test_mode_resynchronize(VALUE self)
+{
+	VALUE test_mode = rb_ivar_get(self, securid_id_session_test_mode);
+	return rb_eql(test_mode, rb_symResynchronize);
+}
+
+int securid_session_is_test_mode_change_pin(VALUE self)
+{
+	VALUE test_mode = rb_ivar_get(self, securid_id_session_test_mode);
+	return rb_eql(test_mode, rb_symChangePin);
+}
+
+// def RSA::SecurID::Session.new(options)
+// options supports:
+//		* test_mode: boolean reflecting if we are in test mode or not
+//								 if value is :resynchronize the test mode will require token resynchronization
+//								 if value is :change_pin the test mode will require a pin change
+static VALUE securid_session_initalize(int argc, VALUE *argv, VALUE self)
 {
 	securid_session_t *session;
 	VALUE session_data;
+	VALUE options = Qnil;
+	VALUE test_mode = Qfalse;
+
+	rb_scan_args(argc, argv, "0:", &options);
 
 	// Allocate a new securid_session_t and wrap it as a ruby object
 	session_data = TypedData_Make_Struct(rb_cData, securid_session_t, &securid_session_data_type, session);
@@ -211,6 +251,13 @@ static VALUE securid_session_initalize(VALUE self)
 
 	// Initalize our status to nil
 	rb_ivar_set(self, securid_id_session_status, Qnil);
+
+	// Initalize our test_mode to the supplied option
+	if (!NIL_P(options))
+	{
+		test_mode = rb_hash_aref(options, rb_symTestMode);
+	}
+	rb_ivar_set(self, securid_id_session_test_mode, test_mode);
 
 	return self;
 }
@@ -228,47 +275,66 @@ static VALUE securid_session_authenticate(VALUE self, VALUE username, VALUE pass
 	// Check that we are in an allowed state
 	securid_session_check_status(self, NULL);
 
-	// Fetch our securid_session_t from self
-	session_data = rb_ivar_get(self, securid_id_session);
-	TypedData_Get_Struct(session_data, securid_session_t, &securid_session_data_type, session);
+	if (!securid_session_is_test_mode(self))
+	{
+		// Fetch our securid_session_t from self
+		session_data = rb_ivar_get(self, securid_id_session);
+		TypedData_Get_Struct(session_data, securid_session_t, &securid_session_data_type, session);
 
-	// Convert our arguments to C Strings
-	username_str = StringValueCStr(username);
-	passcode_str = StringValueCStr(passcode);
+		// Convert our arguments to C Strings
+		username_str = StringValueCStr(username);
+		passcode_str = StringValueCStr(passcode);
 
-	// Initalize the session handler
-	if (SD_Init(&session->handle) != ACM_OK)
-	{
-		rb_raise(rb_eSecurIDError, "Failed to initialize session handler");
-	}
+		// Initalize the session handler
+		if (SD_Init(&session->handle) != ACM_OK)
+		{
+			rb_raise(rb_eSecurIDError, "Failed to initialize session handler");
+		}
 
-	// Lock the username, part of the Two Step Authentication flow
-	if (SD_Lock(session->handle, username_str) != ACM_OK)
-	{
-		rb_raise(rb_eSecurIDError, "Failed to lock username");
-	}
+		// Lock the username, part of the Two Step Authentication flow
+		if (SD_Lock(session->handle, username_str) != ACM_OK)
+		{
+			rb_raise(rb_eSecurIDError, "Failed to lock username");
+		}
 
-	return_value = SD_Check(session->handle, passcode_str, username_str);
+		return_value = SD_Check(session->handle, passcode_str, username_str);
 
-	if (return_value == ACM_OK)
+		if (return_value == ACM_OK)
+		{
+			// We are authenticated
+			status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_authenticated);
+		} else if (return_value == ACM_ACCESS_DENIED) 
+		{
+			// We are denied
+			status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_denied);
+		} else if (return_value == ACM_NEXT_CODE_REQUIRED)
+		{
+			// We need the user to resynchronize the token
+			status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_resynchronize);
+		} else if (return_value == ACM_NEW_PIN_REQUIRED)
+		{
+			// We need the user to enter a new pin
+			status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_change_pin);
+		} else
+		{
+			// Internal error of some sort
+			rb_raise(rb_eSecurIDError, "Failed to authenticate the user");
+		}
+	} else
 	{
-		// We are authenticated
-		status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_authenticated);
-	} else if (return_value == ACM_ACCESS_DENIED) 
-	{
-		// We are denied
-		status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_denied);
-	} else if (return_value == ACM_NEXT_CODE_REQUIRED)
-	{
-		// We need the user to resynchronize the token
-		status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_resynchronize);
-	} else if (return_value == ACM_NEW_PIN_REQUIRED)
-	{
-		// We need the user to enter a new pin
-		status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_change_pin);
-	} else {
-		// Internal error of some sort
-		rb_raise(rb_eSecurIDError, "Failed to authenticate the user");
+		if (securid_session_is_test_mode_resynchronize(self))
+		{
+			// Force resynchronize in resynchronization test mode
+			status =  rb_const_get(rb_cRSASecurIDSession, securid_id_session_resynchronize);
+		} else if (securid_session_is_test_mode_change_pin(self))
+		{
+			// Force pin change in pin change test mode
+			status =  rb_const_get(rb_cRSASecurIDSession, securid_id_session_change_pin);
+		} else
+		{
+			// Force success in test mode
+			status =  rb_const_get(rb_cRSASecurIDSession, securid_id_session_authenticated);
+		}
 	}
 
 	// Update our status
@@ -287,17 +353,27 @@ static VALUE securid_session_change_pin(VALUE self, VALUE pin)
 	// Check that we are in an allowed state
 	securid_session_check_status(self, securid_id_session_change_pin);
 
-	// Fetch our securid_session_t from self
-	session_data = rb_ivar_get(self, securid_id_session);
-	TypedData_Get_Struct(session_data, securid_session_t, &securid_session_data_type, session);
-
-	// Convert our arguments to C Strings
-	pin_str = StringValueCStr(pin);
-
-	if (SD_Pin(session->handle, pin_str) != ACM_NEW_PIN_ACCEPTED)
+	if (!securid_session_is_test_mode(self))
 	{
-		// Changing pin failed for internal reasons
-		rb_raise(rb_eSecurIDError, "Failed to change the pin");
+		// Fetch our securid_session_t from self
+		session_data = rb_ivar_get(self, securid_id_session);
+		TypedData_Get_Struct(session_data, securid_session_t, &securid_session_data_type, session);
+
+		// Convert our arguments to C Strings
+		pin_str = StringValueCStr(pin);
+
+		if (SD_Pin(session->handle, pin_str) != ACM_NEW_PIN_ACCEPTED)
+		{
+			// Changing pin failed for internal reasons
+			rb_raise(rb_eSecurIDError, "Failed to change the pin");
+		}
+	} else
+	{
+		if (securid_session_is_test_mode_change_pin(self))
+		{
+			// exit pin change test mode for regular test mode
+			rb_ivar_set(self, securid_id_session_test_mode, Qtrue);
+		}
 	}
 
 	// Update our status to be unstarted.
@@ -316,13 +392,16 @@ static VALUE securid_session_cancel_pin(VALUE self)
 	// Check that we are in an allowed state
 	securid_session_check_status(self, securid_id_session_change_pin);
 
-	// Fetch our securid_session_t from self
-	session_data = rb_ivar_get(self, securid_id_session);
-	TypedData_Get_Struct(session_data, securid_session_t, &securid_session_data_type, session);
-
-	if (SD_Pin(session->handle, NULL) != ACM_NEW_PIN_ACCEPTED)
+	if (!securid_session_is_test_mode(self))
 	{
-		rb_raise(rb_eSecurIDError, "Failed to cancel changing the pin");
+		// Fetch our securid_session_t from self
+		session_data = rb_ivar_get(self, securid_id_session);
+		TypedData_Get_Struct(session_data, securid_session_t, &securid_session_data_type, session);
+
+		if (SD_Pin(session->handle, NULL) != ACM_NEW_PIN_ACCEPTED)
+		{
+			rb_raise(rb_eSecurIDError, "Failed to cancel changing the pin");
+		}
 	}
 
 	// Update our status to be unstarted.
@@ -331,8 +410,8 @@ static VALUE securid_session_cancel_pin(VALUE self)
 	return Qtrue;
 }
 
-// def RSA::SecurID::Session#resychronize(passcode) -> status
-static VALUE securid_session_resychronize(VALUE self, VALUE passcode)
+// def RSA::SecurID::Session#resynchronize(passcode) -> status
+static VALUE securid_session_resynchronize(VALUE self, VALUE passcode)
 {
 	int return_value;
 	VALUE session_data;
@@ -343,26 +422,37 @@ static VALUE securid_session_resychronize(VALUE self, VALUE passcode)
 	// Check that we are in an allowed state
 	securid_session_check_status(self, securid_id_session_resynchronize);
 
-	// Fetch our securid_session_t from self
-	session_data = rb_ivar_get(self, securid_id_session);
-	TypedData_Get_Struct(session_data, securid_session_t, &securid_session_data_type, session);
-
-	// Convert our arguments to C Strings
-	passcode_str = StringValueCStr(passcode);
-
-	// Initalize the session handler
-	return_value = SD_Next(session->handle, passcode_str);
-	if (return_value == ACM_OK)
+	if (!securid_session_is_test_mode(self))
 	{
-		// We are authenticated
-		status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_authenticated);
-	} else if (return_value == ACM_ACCESS_DENIED)
-	{
-		// We are denied 
-		status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_denied);
+		// Fetch our securid_session_t from self
+		session_data = rb_ivar_get(self, securid_id_session);
+		TypedData_Get_Struct(session_data, securid_session_t, &securid_session_data_type, session);
+
+		// Convert our arguments to C Strings
+		passcode_str = StringValueCStr(passcode);
+
+		// Initalize the session handler
+		return_value = SD_Next(session->handle, passcode_str);
+		if (return_value == ACM_OK)
+		{
+			// We are authenticated
+			status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_authenticated);
+		} else if (return_value == ACM_ACCESS_DENIED)
+		{
+			// We are denied 
+			status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_denied);
+		} else {
+			// Internal error of some sort
+			rb_raise(rb_eSecurIDError, "Failed to synchronize the token");
+		}
 	} else {
-		// Internal error of some sort
-		rb_raise(rb_eSecurIDError, "Failed to synchronize the token");
+		if (securid_session_is_test_mode_resynchronize(self))
+		{
+			// exit resynchronization test mode for regular test mode
+			rb_ivar_set(self, securid_id_session_test_mode, Qtrue);
+		}
+		// Force success in test mode
+		status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_authenticated);
 	}
 
 	// Update our status
@@ -375,10 +465,14 @@ void Init_securid()
 {
 	securid_id_session = rb_intern("session_handler"); // hidden from the ruby runtime due to its name
 	securid_id_session_status = rb_intern("@status");
+	securid_id_session_test_mode = rb_intern("@test_mode");
 	securid_id_session_authenticated = rb_intern("AUTHENTICATED");
 	securid_id_session_denied = rb_intern("DENIED");
 	securid_id_session_change_pin = rb_intern("MUST_CHANGE_PIN");
 	securid_id_session_resynchronize = rb_intern("MUST_RESYNCHRONIZE");
+	rb_symTestMode = ID2SYM(rb_intern("test_mode"));
+	rb_symResynchronize = ID2SYM(rb_intern("resynchronize"));
+	rb_symChangePin = ID2SYM(rb_intern("change_pin"));
 
 	// module RSA
 	rb_mRSA = rb_define_module("RSA");
@@ -396,7 +490,7 @@ void Init_securid()
 	rb_cRSASecurIDSession = rb_define_class_under(rb_mRSASecurID, "Session", rb_cObject);
 
 	// def RSA::SecurID::Session.new
-	rb_define_private_method(rb_cRSASecurIDSession, "initialize", securid_session_initalize, 0);
+	rb_define_private_method(rb_cRSASecurIDSession, "initialize", securid_session_initalize, -1);
 
 	// def RSA::SecurID::Session#authenticate(username, passcode)
 	rb_define_method(rb_cRSASecurIDSession, "authenticate", securid_session_authenticate, 2);
@@ -407,6 +501,6 @@ void Init_securid()
 	// def RSA::SecurID::Session#cancel_pin
 	rb_define_method(rb_cRSASecurIDSession, "cancel_pin", securid_session_cancel_pin, 0);
 
-	// def RSA::SecurID::Session#resychronize
-	rb_define_method(rb_cRSASecurIDSession, "resychronize", securid_session_resychronize, 1);
+	// def RSA::SecurID::Session#resynchronize
+	rb_define_method(rb_cRSASecurIDSession, "resynchronize", securid_session_resynchronize, 1);
 }

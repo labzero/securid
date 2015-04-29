@@ -32,6 +32,9 @@ static VALUE rb_symResynchronize;
 // symbol version of 'change_pin'
 static VALUE rb_symChangePin;
 
+// symbol version of 'denied'
+static VALUE rb_symDenied;
+
 // IDs used to identify RSA::SecurID::Session constants
 ID securid_id_session_authenticated;
 ID securid_id_session_denied;
@@ -188,7 +191,7 @@ static VALUE securid_authenticate(VALUE self, VALUE username, VALUE passcode)
 }
 
 // Checks that the status of the session `self` matches the constant identified by `status_id`. Pass
-// NULL for `status_id` to check if the the status of `self` is Qnil.
+// 0 for `status_id` to check if the the status of `self` is Qnil.
 void securid_session_check_status(VALUE self, ID status_id)
 {
   VALUE current_status = rb_ivar_get(self, securid_id_session_status);
@@ -226,6 +229,12 @@ int securid_session_is_test_mode_change_pin(VALUE self)
 {
   VALUE test_mode = rb_ivar_get(self, securid_id_session_test_mode);
   return rb_eql(test_mode, rb_symChangePin);
+}
+
+int securid_session_is_test_mode_denied(VALUE self)
+{
+  VALUE test_mode = rb_ivar_get(self, securid_id_session_test_mode);
+  return rb_eql(test_mode, rb_symDenied);
 }
 
 // def RSA::SecurID::Session.new(options)
@@ -273,7 +282,7 @@ static VALUE securid_session_authenticate(VALUE self, VALUE username, VALUE pass
   SD_CHAR *passcode_str;
 
   // Check that we are in an allowed state
-  securid_session_check_status(self, NULL);
+  securid_session_check_status(self, (ID)0);
 
   if (!securid_session_is_test_mode(self))
   {
@@ -325,15 +334,19 @@ static VALUE securid_session_authenticate(VALUE self, VALUE username, VALUE pass
     if (securid_session_is_test_mode_resynchronize(self))
     {
       // Force resynchronize in resynchronization test mode
-      status =  rb_const_get(rb_cRSASecurIDSession, securid_id_session_resynchronize);
+      status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_resynchronize);
     } else if (securid_session_is_test_mode_change_pin(self))
     {
       // Force pin change in pin change test mode
-      status =  rb_const_get(rb_cRSASecurIDSession, securid_id_session_change_pin);
+      status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_change_pin);
+    } else if (securid_session_is_test_mode_denied(self))
+    {
+      // Force denied in denied test mode
+      status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_denied);
     } else
     {
       // Force success in test mode
-      status =  rb_const_get(rb_cRSASecurIDSession, securid_id_session_authenticated);
+      status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_authenticated);
     }
   }
 
@@ -473,6 +486,7 @@ void Init_securid()
   rb_symTestMode = ID2SYM(rb_intern("test_mode"));
   rb_symResynchronize = ID2SYM(rb_intern("resynchronize"));
   rb_symChangePin = ID2SYM(rb_intern("change_pin"));
+  rb_symDenied = ID2SYM(rb_intern("denied"));
 
   // module RSA
   rb_mRSA = rb_define_module("RSA");

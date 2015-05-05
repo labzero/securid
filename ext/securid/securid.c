@@ -295,15 +295,17 @@ static VALUE securid_session_authenticate(VALUE self, VALUE username, VALUE pass
     passcode_str = StringValueCStr(passcode);
 
     // Initalize the session handler
-    if (SD_Init(&session->handle) != ACM_OK)
+    return_value = SD_Init(&session->handle);
+    if (return_value != ACM_OK)
     {
-      rb_raise(rb_eSecurIDError, "Failed to initialize session handler");
+      rb_raise(rb_eSecurIDError, "Failed to initialize session handler - code %d", return_value);
     }
 
     // Lock the username, part of the Two Step Authentication flow
-    if (SD_Lock(session->handle, username_str) != ACM_OK)
+    return_value = SD_Lock(session->handle, username_str);
+    if (return_value != ACM_OK)
     {
-      rb_raise(rb_eSecurIDError, "Failed to lock username");
+      rb_raise(rb_eSecurIDError, "Failed to lock username - code %d", return_value);
     }
 
     return_value = SD_Check(session->handle, passcode_str, username_str);
@@ -327,7 +329,7 @@ static VALUE securid_session_authenticate(VALUE self, VALUE username, VALUE pass
     } else
     {
       // Internal error of some sort
-      rb_raise(rb_eSecurIDError, "Failed to authenticate the user");
+      rb_raise(rb_eSecurIDError, "Failed to authenticate the user - code %d", return_value);
     }
   } else
   {
@@ -362,6 +364,7 @@ static VALUE securid_session_change_pin(VALUE self, VALUE pin)
   VALUE session_data;
   securid_session_t *session;
   SD_CHAR *pin_str;
+  int return_value;
 
   // Check that we are in an allowed state
   securid_session_check_status(self, securid_id_session_change_pin);
@@ -375,10 +378,11 @@ static VALUE securid_session_change_pin(VALUE self, VALUE pin)
     // Convert our arguments to C Strings
     pin_str = StringValueCStr(pin);
 
-    if (SD_Pin(session->handle, pin_str) != ACM_NEW_PIN_ACCEPTED)
+    return_value = SD_Pin(session->handle, pin_str);
+    if (return_value != ACM_NEW_PIN_ACCEPTED)
     {
       // Changing pin failed for internal reasons
-      rb_raise(rb_eSecurIDError, "Failed to change the pin");
+      rb_raise(rb_eSecurIDError, "Failed to change the pin - code %d", return_value);
     }
   } else
   {
@@ -401,6 +405,7 @@ static VALUE securid_session_cancel_pin(VALUE self)
   VALUE session_data;
   securid_session_t *session;
   SD_CHAR *pin_str;
+  int return_value;
 
   // Check that we are in an allowed state
   securid_session_check_status(self, securid_id_session_change_pin);
@@ -411,9 +416,10 @@ static VALUE securid_session_cancel_pin(VALUE self)
     session_data = rb_ivar_get(self, securid_id_session);
     TypedData_Get_Struct(session_data, securid_session_t, &securid_session_data_type, session);
 
-    if (SD_Pin(session->handle, NULL) != ACM_NEW_PIN_ACCEPTED)
+    return_value = SD_Pin(session->handle, NULL);
+    if (return_value != ACM_NEW_PIN_ACCEPTED)
     {
-      rb_raise(rb_eSecurIDError, "Failed to cancel changing the pin");
+      rb_raise(rb_eSecurIDError, "Failed to cancel changing the pin - code %d", return_value);
     }
   }
 
@@ -456,7 +462,7 @@ static VALUE securid_session_resynchronize(VALUE self, VALUE passcode)
       status = rb_const_get(rb_cRSASecurIDSession, securid_id_session_denied);
     } else {
       // Internal error of some sort
-      rb_raise(rb_eSecurIDError, "Failed to synchronize the token");
+      rb_raise(rb_eSecurIDError, "Failed to synchronize the token - code %d", return_value);
     }
   } else {
     if (securid_session_is_test_mode_resynchronize(self))

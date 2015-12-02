@@ -1,6 +1,17 @@
 #include "ruby.h"
 #include "acexport.h"
+#include "status_display.h"
 #include "securid.h"
+
+#ifdef WIN32
+  #include <winsock.h>
+#else
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+#endif
+
+#define CTEST(v) ((v) ? Qtrue : Qfalse)
 
 // module RSA
 static VALUE rb_mRSA;
@@ -40,6 +51,37 @@ ID securid_id_session_authenticated;
 ID securid_id_session_denied;
 ID securid_id_session_change_pin;
 ID securid_id_session_resynchronize;
+
+// symbols used to in the agent status hash
+static VALUE rb_symConfigVersion; // 'config_version'
+static VALUE rb_symMaxServers; // 'max_servers'
+static VALUE rb_symMaxReplicas; // 'max_replicas'
+static VALUE rb_symMaxRetries; // 'max_retries'
+static VALUE rb_symBaseTimeout; // 'base_timeout'
+static VALUE rb_symUseDES; // 'use_des'
+static VALUE rb_symTrusted; // 'trusted'
+static VALUE rb_symPort; // 'port'
+static VALUE rb_symServiceName; // 'service_name'
+static VALUE rb_symServiceProtocol; // 'service_protocol'
+static VALUE rb_symServiceProtocolVersion; // 'service_protocol_version'
+static VALUE rb_symServerReleaseNumber; // 'server_release_number'
+static VALUE rb_symServers; // 'servers'
+static VALUE rb_symMajor; // 'major'
+static VALUE rb_symMinor; // 'minor'
+static VALUE rb_symPatch; // 'patch'
+static VALUE rb_symBuild; // 'build'
+static VALUE rb_symAddress; // 'address'
+static VALUE rb_symActiveAddress; // 'active_address'
+static VALUE rb_symAliases; // 'aliases'
+static VALUE rb_symDisplayStatus; // 'display_status'
+static VALUE rb_symHostname; // 'hostname'
+static VALUE rb_symPrimary; // 'primary'
+static VALUE rb_symMaster; // 'master'
+static VALUE rb_symSlave; // 'slave'
+static VALUE rb_symSelectable; // 'selectable'
+static VALUE rb_symEmergency; // 'emergency'
+static VALUE rb_symSuspended; // 'suspended'
+static VALUE rb_symAddressVerified; // 'address_verified'
 
 static void securid_session_free(void *ptr)
 {
@@ -480,6 +522,110 @@ static VALUE securid_session_resynchronize(VALUE self, VALUE passcode)
   return status;
 }
 
+static VALUE securid_agent_status(VALUE self) {
+  VALUE status = Qfalse;
+  VALUE server_release_number;
+  VALUE server_details;
+  VALUE servers;
+  VALUE server_aliases;
+  VALUE display_status;
+  S_status_display agent_status;
+  DISP_SRVR_INFO * server_info;
+  int return_value, i, j, str_length;
+  struct in_addr addr;
+
+  // Initialize the library. Safe to call multiple times.
+  if (AceInitialize() != SD_TRUE) {
+    rb_raise(rb_eSecurIDError, "Failed to initialize authentication library");
+  }
+
+  // Make sure we are zero'd
+  memset(&agent_status, 0, sizeof(agent_status));
+  // Set the struct size so the SDK can identify the version used
+  agent_status.u32Size = (SD_U32) sizeof(agent_status);
+  // Fetch the agent status
+  return_value = AceAgentStatusDisplay(&agent_status);
+
+  if (return_value == ACE_SUCCESS) {
+    status = rb_hash_new();
+
+    // Populate status hash
+    rb_hash_aset(status, rb_symConfigVersion, INT2NUM(agent_status.config_version));
+    rb_hash_aset(status, rb_symMaxServers, INT2NUM(agent_status.acmmaxservers));
+    rb_hash_aset(status, rb_symMaxReplicas, INT2NUM(agent_status.acmmaxreplicas));
+    rb_hash_aset(status, rb_symMaxRetries, INT2NUM(agent_status.acmmaxretries));
+    rb_hash_aset(status, rb_symBaseTimeout, INT2NUM(agent_status.acmbasetimeout));
+    rb_hash_aset(status, rb_symUseDES, INT2NUM(agent_status.use_des));
+    rb_hash_aset(status, rb_symTrusted, INT2NUM(agent_status.trusted));
+    rb_hash_aset(status, rb_symPort, INT2NUM(agent_status.acmport));
+    rb_hash_aset(status, rb_symServiceProtocolVersion, INT2NUM(agent_status.server_hi_protocol));
+
+    str_length = strnlen(agent_status.acmservice, sizeof(agent_status.acmservice) / sizeof(SD_CHAR));
+    rb_hash_aset(status, rb_symServiceName, rb_str_new(agent_status.acmservice, str_length));
+
+    str_length = strnlen(agent_status.acmprotocol, sizeof(agent_status.acmprotocol) / sizeof(SD_CHAR));
+    rb_hash_aset(status, rb_symServiceProtocol, rb_str_new(agent_status.acmprotocol, str_length));
+
+    // Populate release number hash
+    server_release_number = rb_hash_new();
+    rb_hash_aset(server_release_number, rb_symMajor, INT2NUM(agent_status.server_release_from_server[0]));
+    rb_hash_aset(server_release_number, rb_symMinor, INT2NUM(agent_status.server_release_from_server[1]));
+    rb_hash_aset(server_release_number, rb_symPatch, INT2NUM(agent_status.server_release_from_server[2]));
+    rb_hash_aset(server_release_number, rb_symBuild, INT2NUM(agent_status.server_release_from_server[3]));
+    rb_hash_aset(status, rb_symServerReleaseNumber, server_release_number);
+
+    servers = rb_ary_new();
+
+    // Populate server array
+    for (i = 0; i < agent_status.acmmaxreplicas; ++i) {
+      server_info = &agent_status.acm_servers[i];
+
+      if (!(server_info->addr && server_info->hostname)) {
+        continue;
+      }
+
+      server_details = rb_hash_new();
+
+      str_length = strnlen(server_info->hostname, DISP_LENHOSTNAME);
+      rb_hash_aset(server_details, rb_symHostname, str_length ? rb_str_new(server_info->hostname, str_length) : Qnil);
+
+      addr.s_addr = server_info->addr;
+      rb_hash_aset(server_details, rb_symAddress, server_info->addr ? rb_str_new2(inet_ntoa(addr)) : Qnil);
+
+      addr.s_addr = server_info->active_addr;
+      rb_hash_aset(server_details, rb_symActiveAddress, server_info->active_addr ? rb_str_new2(inet_ntoa(addr)) : Qnil);
+
+      // build server aliases array
+      server_aliases = rb_ary_new();
+      for (j = 0; j < DISP_MAXALIASES; ++j) {
+        if (!server_info->aliases[j]) {
+          continue;
+        }
+        addr.s_addr = server_info->aliases[j];
+        rb_ary_push(server_aliases, rb_str_new2(inet_ntoa(addr)));
+      }
+      rb_hash_aset(server_details, rb_symAliases, server_aliases);
+
+      display_status = rb_hash_new();
+      rb_hash_aset(display_status, rb_symPrimary, CTEST(server_info->display_status & DISP_STATUS_PRIMARY));
+      rb_hash_aset(display_status, rb_symMaster, CTEST(server_info->display_status & DISP_MSTR_SLAVE && i == 0));
+      rb_hash_aset(display_status, rb_symSlave, CTEST(server_info->display_status & DISP_MSTR_SLAVE && i > 0));
+      rb_hash_aset(display_status, rb_symSelectable, CTEST(server_info->display_status & DISP_STATUS_SELECTABLE));
+      rb_hash_aset(display_status, rb_symEmergency, CTEST(server_info->display_status & DISP_STATUS_EMERGENCY));
+      rb_hash_aset(display_status, rb_symSuspended, CTEST(server_info->display_status & DISP_STATUS_SUSPENDED));
+      rb_hash_aset(server_details, rb_symDisplayStatus, display_status);
+
+      // Add server details to servers array
+      rb_ary_push(servers, server_details);
+    }
+
+    // Add servers array to status hash
+    rb_hash_aset(status, rb_symServers, servers);
+  }
+
+  return status;
+}
+
 void Init_securid()
 {
   securid_id_session = rb_intern("session_handler"); // hidden from the ruby runtime due to its name
@@ -494,6 +640,36 @@ void Init_securid()
   rb_symChangePin = ID2SYM(rb_intern("change_pin"));
   rb_symDenied = ID2SYM(rb_intern("denied"));
 
+  rb_symConfigVersion = ID2SYM(rb_intern("config_version"));
+  rb_symMaxServers = ID2SYM(rb_intern("max_servers"));
+  rb_symMaxReplicas = ID2SYM(rb_intern("max_replicas"));
+  rb_symMaxRetries = ID2SYM(rb_intern("max_retries"));
+  rb_symBaseTimeout = ID2SYM(rb_intern("base_timeout"));
+  rb_symUseDES = ID2SYM(rb_intern("use_des"));
+  rb_symTrusted = ID2SYM(rb_intern("trusted"));
+  rb_symPort = ID2SYM(rb_intern("port"));
+  rb_symServiceName = ID2SYM(rb_intern("service_name"));
+  rb_symServiceProtocol = ID2SYM(rb_intern("service_protocol"));
+  rb_symServiceProtocolVersion = ID2SYM(rb_intern("service_protocol_version"));
+  rb_symServerReleaseNumber = ID2SYM(rb_intern("server_release_number"));
+  rb_symServers = ID2SYM(rb_intern("servers"));
+  rb_symMajor = ID2SYM(rb_intern("major"));
+  rb_symMinor = ID2SYM(rb_intern("minor"));
+  rb_symPatch = ID2SYM(rb_intern("patch"));
+  rb_symBuild = ID2SYM(rb_intern("build"));
+  rb_symAddress = ID2SYM(rb_intern("address"));
+  rb_symActiveAddress = ID2SYM(rb_intern("active_address"));
+  rb_symAliases = ID2SYM(rb_intern("aliases"));
+  rb_symDisplayStatus = ID2SYM(rb_intern("display_status"));
+  rb_symHostname = ID2SYM(rb_intern("hostname"));
+  rb_symPrimary = ID2SYM(rb_intern("primary"));
+  rb_symMaster = ID2SYM(rb_intern("master"));
+  rb_symSlave = ID2SYM(rb_intern("slave"));
+  rb_symSelectable = ID2SYM(rb_intern("selectable"));
+  rb_symEmergency = ID2SYM(rb_intern("emergency"));
+  rb_symSuspended = ID2SYM(rb_intern("suspended"));
+  rb_symAddressVerified = ID2SYM(rb_intern("address_verified"));
+
   // module RSA
   rb_mRSA = rb_define_module("RSA");
 
@@ -505,6 +681,9 @@ void Init_securid()
 
   // def RSA::SecurID.authenticate(username, passcode)
   rb_define_module_function(rb_mRSASecurID, "authenticate", securid_authenticate, 2);
+
+  // def RSA::SecurID.agent_status
+  rb_define_module_function(rb_mRSASecurID, "agent_status", securid_agent_status, 0);
 
   // class RSA::SecurID::Session
   rb_cRSASecurIDSession = rb_define_class_under(rb_mRSASecurID, "Session", rb_cObject);

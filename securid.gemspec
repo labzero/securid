@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name = "securid"
-  s.version = "0.2.3"
+  s.version = "0.2.4"
 
   s.authors = ["Ian Lesperance", "Edward Holets"]
   s.date = "2015-05-05"

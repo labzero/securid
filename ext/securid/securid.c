@@ -285,6 +285,7 @@ int securid_session_is_test_mode_denied(VALUE self)
 //                 if value is :resynchronize the test mode will require token resynchronization
 //                 if value is :change_pin the test mode will require a pin change
 static VALUE securid_session_initalize(int argc, VALUE *argv, VALUE self)
+static VALUE securid_session_initialize(int argc, VALUE *argv, VALUE self)
 {
   securid_session_t *session;
   VALUE session_data;
@@ -689,7 +690,7 @@ void Init_securid()
   rb_cRSASecurIDSession = rb_define_class_under(rb_mRSASecurID, "Session", rb_cObject);
 
   // def RSA::SecurID::Session.new
-  rb_define_private_method(rb_cRSASecurIDSession, "initialize", securid_session_initalize, -1);
+  rb_define_method(rb_cRSASecurIDSession, "initialize", securid_session_initialize, -1);
 
   // def RSA::SecurID::Session#authenticate(username, passcode)
   rb_define_method(rb_cRSASecurIDSession, "authenticate", securid_session_authenticate, 2);

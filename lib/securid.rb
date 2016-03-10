@@ -23,7 +23,7 @@ module RSA
       end
 
       def denied?
-        @status == AUTHENTICATED
+        @status == DENIED
       end
     end
   end

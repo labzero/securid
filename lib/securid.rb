@@ -9,6 +9,7 @@ module RSA
       DENIED = :denied
       MUST_CHANGE_PIN = :must_change_pin
       MUST_RESYNCHRONIZE = :must_resynchronize
+      UNSTARTED = nil
 
       def resynchronize?
         @status == MUST_RESYNCHRONIZE

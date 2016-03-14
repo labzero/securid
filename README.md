@@ -23,13 +23,29 @@ from RSA.
     require 'rubygems'
     require 'securid'
 
-    success = RSA::SecurID.authenticate(username, passcode)
+    session = RSA::SecurID::Session.new
+    session.authenticate(username, passcode)
+    session.authenticated?                     # true on success
 
-The `authenticate` class method accepts a username and a passcode and
+The `authenticate` instance method accepts a username and a passcode and
 returns true or false to indicate success or failure.
 
 The passcode is simply the concatenation of the user's PIN and their
 current tokencode.
+
+### Test Mode
+
+Since it's not always possible to have an RSA ACE server running (local
+development for example), the gem supports a test mode that will bypass
+any communication with the ACE server and simply return a predetermined
+response.
+
+    require 'rubygems'
+    require 'securid'
+
+    session = RSA::SecurID::Session.new(test_mode: true)
+    session.authenticate(username, passcode)   # never talks to the server
+    session.authenticated?                     # test authentication is always successful by default
 
 ### Errors
 

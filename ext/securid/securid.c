@@ -116,7 +116,20 @@ struct rb_data_type_struct securid_session_data_type = {
   RUBY_TYPED_FREE_IMMEDIATELY
 };
 
-// def RSA::SecurID.authenticate(username, passcode)
+/*
+ * @overload authenticate(username, password)
+ * @deprecated Use {Session#authenticate} instead.
+ * @param username [String] The username to authenticate with.
+ * @param passcode [String] The passcode to authenticate with. Passcodes are the user's pin
+ *   concatenated with the current token value.
+ *
+ * Performs a basic non-interactive authentication attempt.
+ *
+ * @return [Boolean] +true+ on authentication succes, +false+ on authentication denial.
+ * @raise [SecureIDError] if anything beyond a basic rejection of the authentication
+ *   happened such as a pin must be changed, the token needs resynchronization, the ACE
+ *   server can't be found, etc.
+ */
 static VALUE securid_authenticate(VALUE self, VALUE username, VALUE passcode)
 {
   // the authentication handle representing a single authentication
@@ -279,12 +292,20 @@ int securid_session_is_test_mode_denied(VALUE self)
   return rb_eql(test_mode, rb_symDenied);
 }
 
-// def RSA::SecurID::Session.new(options)
-// options supports:
-//    * test_mode: boolean reflecting if we are in test mode or not
-//                 if value is :resynchronize the test mode will require token resynchronization
-//                 if value is :change_pin the test mode will require a pin change
-static VALUE securid_session_initalize(int argc, VALUE *argv, VALUE self)
+/*
+ * @overload initialize(options={})
+ *   @param options [Hash{Symbol=>Symbol,Boolean}] A hash of options.
+ *   @option options [Symbol,Boolean] :test_mode (false) Indicates if the test mode
+ *     should be enabled, and if so, what mode to enable.
+ *     Allowed options are: +true+, +false+, +:resynchronize+, +:change_pin+, +:denied+.
+ *     +true+ means that all authentication steps are returned as successful.
+ *   
+ *   Creates a new session. The session will talk to the RSA server configured via the
+ *   RSA configuration associated with the installed library, or skip talking to the server
+ *   entirely if in test mode.
+ *
+ */
+static VALUE securid_session_initialize(int argc, VALUE *argv, VALUE self)
 {
   securid_session_t *session;
   VALUE session_data;
@@ -313,7 +334,27 @@ static VALUE securid_session_initalize(int argc, VALUE *argv, VALUE self)
   return self;
 }
 
-// def RSA::SecurID::Session#authenticate(username, passcode) -> status
+/*
+ * @overload authenticate(username, passcode)
+ * @param username [String] The username to authenticate with.
+ * @param passcode [String] The passcode to authenticate with. Passcodes are the user's pin concatenated
+ *   with the current token value.
+ *
+ * Attempts to authenticate the user against the RSA ACE server using the username, pin, and token value.
+ * It will indicate if authentication fails due to token issue (pin change or resynchronization request),
+ * or a normal authentication failure (denied). The session object will have the returned status stored in
+ * its {#status status} attribute. A session with a status of {AUTHENTICATED} or
+ * {DENIED} can not be reused. A session with a status of {MUST_CHANGE_PIN} or
+ * {MUST_RESYNCHRONIZE} can be used to complete the required step, and then be used to reauthenticate
+ * with another call to {#authenticate}
+ *
+ * This method can only be called when the session state is {UNSTARTED}. Calling it in any other state
+ * will result in a {SecurIDError} being raised.
+ *
+ * @raise [SecurIDError] if the session is not in the {UNSTARTED} state or if an internal error occurs.
+ * @return [Symbol] The state of the authentication request, which is one of the constants {AUTHENTICATED},
+ *   {DENIED}, {MUST_CHANGE_PIN}, or {MUST_RESYNCHRONIZE}.
+ */
 static VALUE securid_session_authenticate(VALUE self, VALUE username, VALUE passcode)
 {
   int return_value;
@@ -400,7 +441,25 @@ static VALUE securid_session_authenticate(VALUE self, VALUE username, VALUE pass
   return status;
 }
 
-// def RSA::SecurID::Session#change_pin(pin) -> BOOL
+/*
+ * @overload change_pin(pin)
+ * @param pin [String] The new pin for the token.
+ *
+ * Changes the pin associated with the token. This method can only be called when the
+ * session is in the {MUST_CHANGE_PIN} state. Calling it in any other state will result
+ * in a {SecurIDError} being raised. After calling {#change_pin}, the session state is
+ * reset to {UNSTARTED}. A subsequent call to {#authenticate} is needed to actually
+ * authenticate the user.
+ * 
+ * The typical flow for chaning the pin is first call {#authenticate} with the old pin,
+ * see that we are in the {MUST_CHANGE_PIN} state, call {#change_pin} to with the new
+ * pin, then call {#authenticate} with the new pin to finally authorize the user.
+ *
+ *
+ * @raise [SecurIDError] if the session is not in the {MUST_CHANGE_PIN} state, if an
+ *   internal error occurs, or the change request fails.
+ * @return [true] Always returns +true+ or raises an error.
+ */
 static VALUE securid_session_change_pin(VALUE self, VALUE pin)
 {
   VALUE session_data;
@@ -441,7 +500,16 @@ static VALUE securid_session_change_pin(VALUE self, VALUE pin)
   return Qtrue;
 }
 
-// def RSA::SecurID::Session#cancel_pin -> BOOL
+/*
+ * Cancels a pin change request. On success the session state will be set back to {UNSTARTED}.
+ * This method can only be called when the session is in the {MUST_CHANGE_PIN} state. Calling
+ * it in any other state will raise a {SecurIDError}.
+ *
+ *
+ * @raise [SecurIDError] if the session is not in the {MUST_CHANGE_PIN} state, if an internal
+ *   error occurs, or if the the canceling fails.
+ * @return [true] Always returns +true+ or raises an error.
+ */
 static VALUE securid_session_cancel_pin(VALUE self)
 {
   VALUE session_data;
@@ -471,7 +539,19 @@ static VALUE securid_session_cancel_pin(VALUE self)
   return Qtrue;
 }
 
-// def RSA::SecurID::Session#resynchronize(passcode) -> status
+/*
+ * @overload resynchronize(passcode)
+ * @param passcode [String] The user's pin concatenated with the _next_ token value.
+ *
+ * Completes the token resynchronize flow. This method should be called when the server is requesting the user
+ * to resynchronize their token. It is not possible to initiate a resychronization request with this method. The
+ * session must be in the {MUST_RESYNCHRONIZE} state. Callig it in any other state will raise a {SecurIDError}.
+ *
+ *
+ * @raise [SecurIDError] if the session is not in the {MUST_RESYNCHRONIZE} state or the resynchronization fails
+ *   for any reason other than the passcode not matching.
+ * @return [Symbol] Either {AUTHENTICATED} or {DENIED} depending on if the resynchronization was successful.
+ */
 static VALUE securid_session_resynchronize(VALUE self, VALUE passcode)
 {
   int return_value;
@@ -522,6 +602,68 @@ static VALUE securid_session_resynchronize(VALUE self, VALUE passcode)
   return status;
 }
 
+
+/*
+ * Fetches the status of the RSA agent. This includes details about the RSA ACE server
+ * the agent is communicating with. *NOTE:* this method can not be called in test mode
+ * unless there is an actual RSA agent present. The returned status hash is a ruby
+ * version of the +S_status_display+ struct populated by +AceAgentStatusDisplay+, and
+ * any questions about the meaning of its fields should be directed there.
+ *
+ * @example Returned Status Hash
+ *   {
+ *     config_version: 15,
+ *     max_servers: 1,
+ *     max_replicas: 4,
+ *     max_retries: 5,
+ *     base_timeout: 5,
+ *     use_des: 1,
+ *     trusted: 0,
+ *     port: 5500,
+ *     service_protocol_version: 0,
+ *     service_name: "securid",
+ *     service_protocol: "udp",
+ *     server_release_number: {
+ *       major: 0,
+ *       minor: 0,
+ *       patch: 0,
+ *       build: 0
+ *     },
+ *     servers: [
+ *       {
+ *         hostname: "rsa.example.com",
+ *         address: "192.168.0.1",
+ *         active_address: nil,
+ *         aliases: [],
+ *         display_status: {
+ *           primary: true,
+ *           master: true,
+ *           slave: false,
+ *           selectable: false,
+ *           emergency: false,
+ *           suspended: true
+ *         }
+ *       },
+ *       {
+ *         hostname: nil,
+ *         address: "192.168.0.2",
+ *         active_address: nil,
+ *         aliases: [],
+ *         display_status: {
+ *           primary: false,
+ *           master: false,
+ *           slave: false,
+ *           selectable: false,
+ *           emergency: false,
+ *           suspended: true
+ *         }
+ *       }
+ *     ]
+ *   }
+ *
+ * @raise [SecurIDError] if the RSA agent failed to initialize.
+ * @return [Hash] The status hash, keyed by symbols.
+ */
 static VALUE securid_agent_status(VALUE self) {
   VALUE status = Qfalse;
   VALUE server_release_number;
@@ -536,7 +678,7 @@ static VALUE securid_agent_status(VALUE self) {
 
   // Initialize the library. Safe to call multiple times.
   if (AceInitialize() != SD_TRUE) {
-    rb_raise(rb_eSecurIDError, "Failed to initialize authentication library");
+    rb_raise(rb_eSecurIDError, "Failed to initialize authentication agent");
   }
 
   // Make sure we are zero'd
@@ -676,7 +818,14 @@ void Init_securid()
   // module RSA::SecurID
   rb_mRSASecurID = rb_define_module_under(rb_mRSA, "SecurID");
 
-  // class RSA::SecurID::SecurIDError < StandardError
+  /*
+   * Document-class: RSA::SecurID::SecurIDError
+   *
+   * The error class used by the {Session} class to indicate internal state or communication
+   * errors. Error codes found in the messages can be referenced against the RSA SDK
+   * documentation.
+   *
+   */
   rb_eSecurIDError = rb_define_class_under(rb_mRSASecurID, "SecurIDError", rb_eStandardError);
 
   // def RSA::SecurID.authenticate(username, passcode)
@@ -689,7 +838,7 @@ void Init_securid()
   rb_cRSASecurIDSession = rb_define_class_under(rb_mRSASecurID, "Session", rb_cObject);
 
   // def RSA::SecurID::Session.new
-  rb_define_private_method(rb_cRSASecurIDSession, "initialize", securid_session_initalize, -1);
+  rb_define_method(rb_cRSASecurIDSession, "initialize", securid_session_initialize, -1);
 
   // def RSA::SecurID::Session#authenticate(username, passcode)
   rb_define_method(rb_cRSASecurIDSession, "authenticate", securid_session_authenticate, 2);

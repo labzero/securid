@@ -12,4 +12,5 @@ Gem::Specification.new do |s|
   s.summary = "A library for authenticating with an RSA SecurID ACE Authentication Server"
   s.homepage = "https://github.com/labzero/securid"
   s.license = 'MIT'
+  s.required_ruby_version = '>= 2.0.0'
 end

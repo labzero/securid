@@ -10,6 +10,6 @@ Gem::Specification.new do |s|
   s.files = ["ext/securid/securid.c", "ext/securid/securid.h", "ext/securid/extconf.rb", "lib/securid.rb"]
   s.require_paths = ["lib"]
   s.summary = "A library for authenticating with an RSA SecurID ACE Authentication Server"
-  s.homepage = "http://github.com/sendstream/securid"
+  s.homepage = "https://github.com/labzero/securid"
   s.license = 'MIT'
 end

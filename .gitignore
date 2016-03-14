@@ -4,3 +4,6 @@ mkmf.log
 *.o
 *.so
 ext/securid/.DS_Store
+doc
+.yardoc
+.DS_Store
